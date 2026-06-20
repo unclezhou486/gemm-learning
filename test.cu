@@ -4,12 +4,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+#include <math.h>
+
 
 #define M 512
 #define K 512
 #define N 512
 
 #define TILE_WIDTH 16
+
+#define EPS 1e-4
 
 void matmul_cpu(float* A, float* B, float* C, int m, int k, int n) {
     for (int i = 0; i < m; i++) {
@@ -24,12 +28,12 @@ void matmul_cpu(float* A, float* B, float* C, int m, int k, int n) {
 }
 
 __global__ void matmul_gpu(float* A, float* B, float* C, int m, int k, int n) {
-    int row = blockIdx.y * blockDim.y + blockIdx.y;
-    int col = blockIdx.x * blockDim.x + blockIdx.x;
+    int row = blockIdx.y * blockDim.y + threadIdx.y;
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
 
     if (row < m && col < n) {
         float sum = 0.0f;
-        for (int l = 0; l < m; l++) {
+        for (int l = 0; l < k; l++) {
             sum += A[row * k + l] * B[l * n + col];
         }
         C[row * n + col] = sum;
@@ -78,7 +82,7 @@ int main() {
     // int num_blocks = (N + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
     printf("Performing warm-up runs...\n");
-    for (int i = 0; i < 1; i++) {
+    for (int i = 0; i < 3; i++) {
         matmul_cpu(h_A, h_B, h_C_cpu, M, K, N);
         matmul_gpu<<<gridDim, blockDim>>>(d_A, d_B, d_C, M, K, N);
         cudaDeviceSynchronize();
@@ -86,18 +90,19 @@ int main() {
     printf("Benchmarking CPU implementation ...\n");
 
     double cpu_total_time = 0.0;
-    for (int i = 0; i < 1; i++) {
+    int run_times = 20;
+    for (int i = 0; i < run_times; i++) {
         double start_time = get_time();
         matmul_cpu(h_A, h_B, h_C_cpu, M, K, N);
         double end_time = get_time();
         cpu_total_time += end_time - start_time;
     }
 
-    double cpu_avg_time = cpu_total_time / 1.0;
+    double cpu_avg_time = cpu_total_time / run_times;
 
     printf("Benchmarking GPU implementation ... \n");
     double gpu_total_time = 0.0;
-    for (int i = 0; i < 1; i++) {
+    for (int i = 0; i < run_times; i++) {
         double start_time = get_time();
         matmul_gpu<<<gridDim, blockDim>>>(d_A, d_B, d_C, M, K, N);
         cudaDeviceSynchronize();
@@ -105,33 +110,31 @@ int main() {
         gpu_total_time += end_time - start_time;
     }
 
-    double gpu_avg_time = gpu_total_time / 1.0;
+    double gpu_avg_time = gpu_total_time / run_times;
 
     printf("CPU average time: %f milliseconds\n", cpu_avg_time * 1000);
     printf("GPU average time: %f milliseconds\n", gpu_avg_time * 1000);
     printf("Speedup: %fx\n", cpu_avg_time / gpu_avg_time);
 
-    // cudaMemcpy(h_c_gpu, d_c, size, cudaMemcpyDeviceToHost);
-    //
-    // bool correct = true;
-    // for (int i = 0; i < N; i++) {
-    //     if (fabs(h_c_cpu[i] - h_c_gpu[i]) > 1e-5) {
-    //         correct = false;
-    //         break;
-    //     }
-    // }
-    //
-    // printf("Result are %s \n", correct ? "correct" : "incorrect");
-    //
-    // free(h_a);
-    // free(h_b);
-    // free(h_c_cpu);
-    // free(h_c_gpu);
-    // cudaFree(d_a);
-    // cudaFree(d_b);
-    // cudaFree(d_c);
-
-    // hello_world<<<2, 4>>>();
-    // cudaDeviceSynchronize();
+    cudaMemcpy(h_C_gpu, d_C, size_C, cudaMemcpyDeviceToHost);
+    
+    bool correct = true;
+    for (int i = 0; i < N*M; i++) {
+        if (fabs(h_C_cpu[i] - h_C_gpu[i]) > EPS) {
+            // printf("%f %f\n",h_C_cpu[i],h_C_gpu[i]);
+            correct = false;
+            break;
+        }
+    }
+    
+    printf("Result are %s \n", (correct ? "correct" : "incorrect"));
+    
+    free(h_A);
+    free(h_B);
+    free(h_C_cpu);
+    free(h_C_gpu);
+    cudaFree(d_A);
+    cudaFree(d_B);
+    cudaFree(d_C);
     return 0;
 }
