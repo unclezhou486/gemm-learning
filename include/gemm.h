@@ -1,7 +1,19 @@
 #pragma once
 #include <cuda_runtime.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 #define TILE_WIDTH 32
+
+#define CUDA_CHECK(err)                                                    \
+    do {                                                                   \
+        cudaError_t e = (err);                                             \
+        if (e != cudaSuccess) {                                            \
+            fprintf(stderr, "CUDA Error [%s:%d]: %s\n", __FILE__, __LINE__, \
+                    cudaGetErrorString(e));                                 \
+            exit(EXIT_FAILURE);                                            \
+        }                                                                  \
+    } while (0)
 
 void matmul_cpu(
     float* A,
