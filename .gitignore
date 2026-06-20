@@ -6,3 +6,5 @@
 *.fatbin
 main
 notes/
+# .html
+report*

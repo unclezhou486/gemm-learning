@@ -3,11 +3,13 @@ CUDA_ARCH := sm_86
 NVCC := nvcc
 
 TARGET := main
-SRC := test.cu
 
-NVCC_FLAGS := -O3 -arch=$(CUDA_ARCH)
+SRC := main.cu \
+       src/cpu_gemm.cu \
+       src/naive_gemm.cu \
+       src/tiled_gemm.cu
 
-.PHONY: all run clean
+NVCC_FLAGS := -O3 -arch=$(CUDA_ARCH) -Iinclude
 
 all: $(TARGET)
 
@@ -19,3 +21,5 @@ run: $(TARGET)
 
 clean:
 	rm -f $(TARGET)
+
+.PHONY: all run clean
