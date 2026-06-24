@@ -41,3 +41,12 @@ __global__ void matmul_gpu_tiled(
     int k,
     int n
 );
+
+__global__ void matmul_gpu_thread_tiled_32x32(
+    float* A, 
+    float* B, 
+    float* C, 
+    int m, 
+    int k, 
+    int n
+);

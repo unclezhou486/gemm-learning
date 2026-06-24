@@ -8,11 +8,14 @@ PROF_TARGET := profile
 SRC := main.cu \
        src/cpu_gemm.cu \
        src/naive_gemm.cu \
-       src/tiled_gemm.cu
+       src/tiled_gemm.cu \
+	   src/thread_tiled_gemm.cu
+
 
 PROF_SRC := profile.cu \
             src/naive_gemm.cu \
-            src/tiled_gemm.cu
+            src/tiled_gemm.cu \
+			src/thread_tiled_gemm.cu
 
 NVCC_FLAGS := -O3 -arch=$(CUDA_ARCH) -Iinclude
 

@@ -27,6 +27,14 @@ bool verify(float* ref, float* out, int size) {
     return true;
 }
 
+struct KernelInfo {
+    const char* name;
+    void (&func)(float* ,float* ,float* ,int ,int ,int);
+    dim3 block;
+    dim3 grid;
+};
+
+
 int main() {
     float *h_A, *h_B, *h_C_ref, *h_C_gpu;
     float *d_A, *d_B, *d_C;
@@ -53,79 +61,100 @@ int main() {
     CUDA_CHECK(cudaMemcpy(d_A, h_A, size_A, cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(d_B, h_B, size_B, cudaMemcpyHostToDevice));
 
-    dim3 blockDim(TILE_WIDTH, TILE_WIDTH);
-    dim3 gridDim((N + TILE_WIDTH - 1) / TILE_WIDTH,
-                 (M + TILE_WIDTH - 1) / TILE_WIDTH);
+    dim3 block_32_32(TILE_WIDTH, TILE_WIDTH);
+    dim3 grid_32_32((N+TILE_WIDTH-1)/TILE_WIDTH,
+                    (M+TILE_WIDTH-1)/TILE_WIDTH);
+    dim3 block_8_8(8, 8);
+    dim3 grid_8_8((N+TILE_WIDTH-1)/TILE_WIDTH,
+                    (M+TILE_WIDTH-1)/TILE_WIDTH);
 
-    // warmup
+    // 
+    KernelInfo kernels[] = {
+        {"Naive",                   matmul_gpu_naive,                   block_32_32,    grid_32_32},
+        {"Tiled",                   matmul_gpu_tiled,                   block_32_32,    grid_32_32},
+        {"Thread Tiled 32x32 ",     matmul_gpu_thread_tiled_32x32 ,     block_8_8,      grid_8_8},
 
-    printf("Performing warm-up runs...\n");
-    for (int i = 0; i < 3; i++) {
-        matmul_gpu_naive<<<gridDim, blockDim>>>(d_A, d_B, d_C, M, K, N);
+    };
+    int num_kernels = sizeof(kernels) / sizeof(kernels[0]);
+    //1. Naive to ref
+    printf("Generating baseline reference result via Naive kernel...\n");
+    CUDA_CHECK(cudaMemset(d_C,0,size_C));
+    kernels[0].func<<<kernels[0].grid,kernels[0].block>>>(d_A,d_B,d_C,M,K,N);
+    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaDeviceSynchronize());
+    CUDA_CHECK(cudaMemcpy(h_C_ref,d_C,size_C,cudaMemcpyDeviceToHost));
+
+
+    //2. warmup
+
+    printf("Performing warm-up runs for all kernels ...\n");
+    
+    for(int i=0;i<num_kernels;++i){
+        for(int j=0;j<2;j++){
+            kernels[i].func<<<kernels[i].grid,kernels[i].block>>>(d_A,d_B,d_C,M,K,N);
+        }
         CUDA_CHECK(cudaGetLastError());
         CUDA_CHECK(cudaDeviceSynchronize());
-        matmul_gpu_tiled<<<gridDim, blockDim>>>(d_A, d_B, d_C, M, K, N);
-        CUDA_CHECK(cudaGetLastError());
-        CUDA_CHECK(cudaDeviceSynchronize());
     }
 
-    // benchmark naive (also serves as reference for tiled verification)
-    printf("Benchmarking GPU Naive implementation ...\n");
+    //3.benchmark
 
-    cudaEvent_t start_1, stop_1;
-    CUDA_CHECK(cudaEventCreate(&start_1));
-    CUDA_CHECK(cudaEventCreate(&stop_1));
+    int run_times = 10;
 
-    int run_times = 1;
+    float results_avg_time[num_kernels] = {0};
+    bool results_verify[num_kernels] = {false};
 
-    CUDA_CHECK(cudaEventRecord(start_1));
-    for (int i = 0; i < run_times; i++) {
-        matmul_gpu_naive<<<gridDim, blockDim>>>(d_A, d_B, d_C, M, K, N);
+
+    printf("\nStarting benchmark (run_times = %d)...\n", run_times);
+    for (int k = 0; k < num_kernels; k++) {
+        printf("Benchmarking %s ...\n", kernels[k].name);
+        
+        // 每次测试前清零目标显存，防止错误的实现因为继承前一个算子的旧值而通过测试
+        CUDA_CHECK(cudaMemset(d_C, 0, size_C));
+
+        cudaEvent_t start, stop;
+        CUDA_CHECK(cudaEventCreate(&start));
+        CUDA_CHECK(cudaEventCreate(&stop));
+
+        CUDA_CHECK(cudaEventRecord(start));
+        for (int i = 0; i < run_times; i++) {
+            kernels[k].func<<<kernels[k].grid, kernels[k].block>>>(d_A, d_B, d_C, M, K, N);
+        }
+        CUDA_CHECK(cudaEventRecord(stop));
+        CUDA_CHECK(cudaEventSynchronize(stop));
         CUDA_CHECK(cudaGetLastError());
+
+        float total_time;
+        CUDA_CHECK(cudaEventElapsedTime(&total_time, start, stop));
+        results_avg_time[k] = total_time / run_times;
+
+        // 拷贝结果回主机并验证正确性
+        CUDA_CHECK(cudaMemcpy(h_C_gpu, d_C, size_C, cudaMemcpyDeviceToHost));
+        results_verify[k] = verify(h_C_ref, h_C_gpu, M * N);
+
+        CUDA_CHECK(cudaEventDestroy(start));
+        CUDA_CHECK(cudaEventDestroy(stop));
     }
-    CUDA_CHECK(cudaEventRecord(stop_1));
-    CUDA_CHECK(cudaEventSynchronize(stop_1));
 
-    float naive_total_time;
-    CUDA_CHECK(cudaEventElapsedTime(&naive_total_time, start_1, stop_1));
-
-    double naive_avg_time = naive_total_time / run_times;
-
-    // stash naive result as reference (avoids slow CPU matmul on large sizes)
-    CUDA_CHECK(cudaMemcpy(h_C_ref, d_C, size_C, cudaMemcpyDeviceToHost));
-
-    // benchmark tiled
-    printf("Benchmarking GPU Tiled implementation ...\n");
-
-    cudaEvent_t start_2, stop_2;
-    CUDA_CHECK(cudaEventCreate(&start_2));
-    CUDA_CHECK(cudaEventCreate(&stop_2));
-
-    CUDA_CHECK(cudaEventRecord(start_2));
-    for (int i = 0; i < run_times; i++) {
-        matmul_gpu_tiled<<<gridDim, blockDim>>>(d_A, d_B, d_C, M, K, N);
-        CUDA_CHECK(cudaGetLastError());
+    // --- 4. 汇总并打印对比报告 ---
+    printf("\n================================= GEMM BENCHMARK REPORT =================================\n");
+    printf("%-18s | %-15s | %-10s | %-12s | %-10s\n", "Kernel Name", "Avg Time (ms)", "Speedup", "GFLOPS", "Verify");
+    printf("-----------------------------------------------------------------------------------------\n");
+    
+    double naive_time = results_avg_time[0];
+    for (int k = 0; k < num_kernels; k++) {
+        double avg_time = results_avg_time[k];
+        double speedup = naive_time / avg_time;
+        // 矩阵乘法的 FLOP 计算公式为: 2 * M * K * N
+        double gflops = (2.0 * M * K * N) / (avg_time / 1000.0) / 1e9;
+        printf("%-18s | %15.4f | %9.2fx | %12.2f | %-10s\n", 
+               kernels[k].name, 
+               avg_time, 
+               speedup, 
+               gflops, 
+               results_verify[k] ? "PASS" : "FAIL");
     }
-    CUDA_CHECK(cudaEventRecord(stop_2));
-    CUDA_CHECK(cudaEventSynchronize(stop_2));
-
-    float tiled_total_time;
-    CUDA_CHECK(cudaEventElapsedTime(&tiled_total_time, start_2, stop_2));
-    double tiled_avg_time = tiled_total_time / run_times;
-
-    printf("GPU Naive average time: %f milliseconds\n", naive_avg_time);
-    printf("GPU Tiled average time: %f milliseconds\n", tiled_avg_time);
-    printf("Speedup: %fx\n", naive_avg_time / tiled_avg_time);
-
-    double naive_gflops = (2.0 * M * K * N) / (naive_avg_time / 1000.0) / 1e9;
-    double tiled_gflops = (2.0 * M * K * N) / (tiled_avg_time / 1000.0) / 1e9;
-    printf("Naive GFLOPS: %.2f\n", naive_gflops);
-    printf("Tiled GFLOPS: %.2f\n", tiled_gflops);
-
-    // verify: compare tiled output against naive reference
-    CUDA_CHECK(cudaMemcpy(h_C_gpu, d_C, size_C, cudaMemcpyDeviceToHost));
-    bool ok = verify(h_C_ref, h_C_gpu, M * N);
-    printf("Tiled result: %s\n", ok ? "PASS" : "FAIL");
+    printf("=========================================================================================\n");
 
     // free
     free(h_A);
@@ -135,10 +164,6 @@ int main() {
     CUDA_CHECK(cudaFree(d_A));
     CUDA_CHECK(cudaFree(d_B));
     CUDA_CHECK(cudaFree(d_C));
-    CUDA_CHECK(cudaEventDestroy(start_1));
-    CUDA_CHECK(cudaEventDestroy(stop_1));
-    CUDA_CHECK(cudaEventDestroy(start_2));
-    CUDA_CHECK(cudaEventDestroy(stop_2));
 
     return 0;
 }
