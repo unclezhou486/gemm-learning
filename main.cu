@@ -72,7 +72,9 @@ int main() {
     KernelInfo kernels[] = {
         {"Naive",                   matmul_gpu_naive,                   block_32_32,    grid_32_32},
         {"Tiled",                   matmul_gpu_tiled,                   block_32_32,    grid_32_32},
-        {"Thread Tiled 32x32 ",     matmul_gpu_thread_tiled_32x32 ,     block_8_8,      grid_8_8},
+        {"Thread Tiled x32 ",     matmul_gpu_thread_tiled_32x32 ,     block_8_8,      grid_8_8},
+        {"Thread Tiled x16 ",     matmul_gpu_thread_tiled_32x16 ,     block_8_8,      grid_8_8},
+        {"Thread Tiled x8 ",     matmul_gpu_thread_tiled_32x8 ,     block_8_8,      grid_8_8},
 
     };
     int num_kernels = sizeof(kernels) / sizeof(kernels[0]);
